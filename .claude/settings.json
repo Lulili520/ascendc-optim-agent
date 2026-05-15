@@ -1,0 +1,74 @@
+{
+  "env": {
+    "ANTHROPIC_AUTH_TOKEN": "sk-242209ff3e054726b9952b88459acf98",
+    "ANTHROPIC_BASE_URL": "https://api.deepseek.com/anthropic",
+    "ANTHROPIC_DEFAULT_HAIKU_MODEL": "deepseek-v4-pro",
+    "ANTHROPIC_DEFAULT_OPUS_MODEL": "deepseek-v4-pro",
+    "ANTHROPIC_DEFAULT_SONNET_MODEL": "deepseek-v4-pro",
+    "ANTHROPIC_MODEL": "deepseek-v4-pro"
+  },
+  "permissions": {
+    "allow": [
+      "Bash(npu-smi:*)",
+      "Bash(npu:*)",
+      "Bash(cmake:*)",
+      "Bash(make:*)",
+      "Bash(bisheng:*)",
+      "Bash(python:*)",
+      "Bash(python3:*)",
+      "Bash(msprof:*)",
+      "Bash(grep:*)",
+      "Bash(find:*)",
+      "Bash(ls:*)",
+      "Bash(cat:*)",
+      "Bash(mkdir:*)",
+      "Bash(cp:*)",
+      "Bash(mv:*)",
+      "Bash(rm:*)",
+      "Bash(cut:*)",
+      "Bash(wc:*)",
+      "Bash(head:*)",
+      "Bash(tail:*)",
+      "Bash(sort:*)",
+      "Bash(uniq:*)",
+      "Bash(awk:*)",
+      "Bash(sed:*)",
+      "Bash(tr:*)",
+      "Bash(ln:*)",
+      "Bash(bash:*)",
+      "Bash(sh:*)",
+      "Bash(source:*)",
+      "Bash(diff:*)",
+      "Bash(echo:*)",
+      "Bash(which:*)",
+      "WebFetch",
+      "WebSearch"
+    ]
+  },
+  "agents": {
+    "shaper": {
+      "description": "设计测试 shape + 编译验证 + 基线性能采集。",
+      "tools": ["Read", "Write", "Edit", "Bash"],
+      "model": "sonnet",
+      "skills": ["shape-design", "npu-architecture", "compile-and-profile"]
+    },
+    "planner": {
+      "description": "通读源码 + 跨 shape 性能分析 + 优化策略输出。",
+      "tools": ["Read", "Bash", "WebSearch", "WebFetch"],
+      "model": "sonnet",
+      "skills": ["perf-analysis", "npu-architecture"]
+    },
+    "coder": {
+      "description": "按策略改写 op_kernel/*.asc 和 *_tiling.h。",
+      "tools": ["Read", "Write", "Edit", "Bash"],
+      "model": "sonnet",
+      "skills": ["kernel-patterns", "npu-architecture"]
+    },
+    "builder": {
+      "description": "编译验证 + 精度检查 + msprof 性能采集归档 + 错误诊断修复。",
+      "tools": ["Read", "Write", "Edit", "Bash", "Grep", "WebSearch"],
+      "model": "sonnet",
+      "skills": ["compile-and-profile", "error-diagnosis", "npu-architecture"]
+    }
+  }
+}

@@ -1,0 +1,103 @@
+#include "kernel_operator.h"
+#include "adv_api/math/erfc.h"
+#include "Erfc_tiling.h"
+
+class KernelErfc {
+public:
+    __aicore__ inline KernelErfc(AscendC::TPipe* pipe) { pipe_ = pipe; };
+
+    __aicore__ inline void Init(GM_ADDR x, GM_ADDR y, const __gm__ ErfcTilingData* tiling)
+    {
+        this->tiling = tiling;
+        uint32_t blockIdx = AscendC::GetBlockIdx();
+        if (blockIdx < tiling->blockNum - 1) {
+            total = tiling->numPerCore;
+        } else {
+            total = tiling->tailNumLastCore;
+        }
+        tileNum = (total + tiling->ubFormer - 1) / tiling->ubFormer;
+        tailElementNum = total - tiling->ubFormer * (tileNum - 1);
+
+        xGm.SetGlobalBuffer((__gm__ half*)x + blockIdx * tiling->numPerCore, total);
+        yGm.SetGlobalBuffer((__gm__ half*)y + blockIdx * tiling->numPerCore, total);
+
+        pipe_->InitBuffer(inQueueX, DOUBLE_BUFFER, tiling->ubFormer * sizeof(half));
+        pipe_->InitBuffer(outQueueY, DOUBLE_BUFFER, tiling->ubFormer * sizeof(half));
+        pipe_->InitBuffer(tmpBuf, tiling->tmpBufSize);
+    }
+
+    __aicore__ inline void Process()
+    {
+        if (tileNum == 0) return;
+
+        uint32_t firstCount = (tileNum == 1) ? tailElementNum : tiling->ubFormer;
+        CopyIn(firstCount, 0);
+
+        for (uint32_t i = 0; i < tileNum; i++) {
+            uint32_t curCount = (i == tileNum - 1) ? tailElementNum : tiling->ubFormer;
+            Compute(curCount);
+            CopyOut(curCount, i);
+            if (i < tileNum - 1) {
+                uint32_t nextCount = (i + 1 == tileNum - 1) ? tailElementNum : tiling->ubFormer;
+                CopyIn(nextCount, i + 1);
+            }
+        }
+    }
+
+    __aicore__ inline void CopyIn(uint32_t count, uint32_t tileIdx)
+    {
+        AscendC::LocalTensor<half> xLocal = inQueueX.AllocTensor<half>();
+        if (count == tiling->ubFormer || (count % DATA_ALIGN == 0)) {
+            AscendC::DataCopy(xLocal, xGm[tileIdx * tiling->ubFormer], static_cast<uint32_t>(count));
+        } else {
+            AscendC::DataCopyParams copyParams = {1, static_cast<uint16_t>(count * sizeof(half)), 0, 0};
+            AscendC::DataCopyPadParams padParams = {false, 0, 0, 0};
+            AscendC::DataCopyPad(xLocal, xGm[tileIdx * tiling->ubFormer], copyParams, padParams);
+        }
+        inQueueX.EnQue(xLocal);
+    }
+
+    __aicore__ inline void Compute(uint32_t count)
+    {
+        AscendC::LocalTensor<half> xLocal = inQueueX.DeQue<half>();
+        AscendC::LocalTensor<half> yLocal = outQueueY.AllocTensor<half>();
+        AscendC::LocalTensor<uint8_t> tmpLocal = tmpBuf.Get<uint8_t>();
+
+        AscendC::Erfc<half>(yLocal, xLocal, tmpLocal, count);
+
+        outQueueY.EnQue<half>(yLocal);
+        inQueueX.FreeTensor(xLocal);
+    }
+
+    __aicore__ inline void CopyOut(uint32_t count, uint32_t tileIdx)
+    {
+        AscendC::LocalTensor<half> yLocal = outQueueY.DeQue<half>();
+        if (count == tiling->ubFormer || (count % DATA_ALIGN == 0)) {
+            AscendC::DataCopy(yGm[tileIdx * tiling->ubFormer], yLocal, static_cast<uint32_t>(count));
+        } else {
+            AscendC::DataCopyParams copyParams = {1, static_cast<uint16_t>(count * sizeof(half)), 0, 0};
+            AscendC::DataCopy(yGm[tileIdx * tiling->ubFormer], yLocal, copyParams);
+        }
+        outQueueY.FreeTensor(yLocal);
+    }
+
+private:
+    AscendC::TPipe* pipe_;
+    const __gm__ ErfcTilingData* tiling;
+    AscendC::GlobalTensor<half> xGm;
+    AscendC::GlobalTensor<half> yGm;
+    AscendC::TQue<AscendC::TPosition::VECIN, 2> inQueueX;
+    AscendC::TQue<AscendC::TPosition::VECOUT, 2> outQueueY;
+    AscendC::TBuf<AscendC::TPosition::VECCALC> tmpBuf;
+    uint32_t total;
+    uint32_t tileNum;
+    uint32_t tailElementNum;
+};
+
+extern "C" __global__ __aicore__ void Erfc_kernel(GM_ADDR x, GM_ADDR y, GM_ADDR tiling)
+{
+    AscendC::TPipe pipe;
+    KernelErfc op(&pipe);
+    op.Init(x, y, (__gm__ ErfcTilingData*)tiling);
+    op.Process();
+}
