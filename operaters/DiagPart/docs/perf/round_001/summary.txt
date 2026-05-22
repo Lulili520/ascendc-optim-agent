@@ -1,0 +1,42 @@
+=== 上板性能统计摘要 ===
+Op: DiagPart_kernel | Type: vector | Duration: 22.9us | BlockDim: 1 | Freq: 0/1800
+
+--- PipeUtilization (1 cores, prefix=aiv) ---
+                                  min        avg        max
+  aiv_time(us)                22.38      22.38      22.38
+  vec_ratio%                   0.10       0.10       0.10
+  scalar_ratio%               95.06      95.06      95.06
+  mte2_ratio%                  0.01       0.01       0.01
+  mte3_ratio%                  0.44       0.44       0.44
+  icache_miss%                 7.29       7.29       7.29
+  mte3_active_bw                2.4        2.4        2.4    (GB/s)
+
+--- 头开销 ---
+  Task Duration: 22.9us | 最长核: 22.38us | 头开销: 0.52us (2.3%)
+
+--- Memory ---
+  UB→GM: 0.2KB total (0.2KB/core), BW usage: 0.01%
+  主存读取: 19.5KB total
+  主存写入: 1.1KB total
+  UB→GM avg BW: 0.01 GB/s
+
+--- MemoryUB ---
+  UB write BW (scalar): avg=0.1 GB/s
+
+--- L2Cache ---
+  total_hit: avg=54.3% (min=54.3%, max=54.3%)
+  read_hit: avg=52.6% (min=52.6%, max=52.6%)
+  write_hit: avg=87.5% (min=87.5%, max=87.5%)
+  write cache: hit=7 miss=1
+
+--- ResourceConflict ---
+  vec_total_cflt: 0.00% | bankgroup_cflt: 0.00% | bank_cflt: 0.00% | resc_cflt: 0.00% | mte_cflt: 0.00%
+  vec_wait: 0.00% | mte2_wait: 0.00% | mte3_wait: 0.05%
+
+--- ArithmeticUtilization ---
+  vec_misc: 0.1%
+  vec_fops: 128/core
+
+--- 原始数据位置 ---
+  CSV 文件: /root/autodl-tmp/ops_origin/operators/DiagPart/docs/perf/round_001/
+  如需逐核详情，请 Read 对应 CSV 文件。

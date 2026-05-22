@@ -1,0 +1,44 @@
+=== 上板性能统计摘要 ===
+Op: Complex_kernel | Type: vector | Duration: 10271.540039us | BlockDim: 48 | Freq: 0/1800
+
+--- PipeUtilization (48 cores, prefix=aiv) ---
+                                  min        avg        max
+  aiv_time(us)              6447.82   10189.22   10270.61
+  scalar_ratio%               99.71      99.73      99.75
+  mte2_ratio%                  0.30       0.32       0.34
+  mte3_ratio%                  0.14       0.15       0.16
+  mte2_active_bw               37.9       40.5       43.2    (GB/s)
+  mte3_active_bw               79.8       85.2       88.8    (GB/s)
+
+--- 头开销 ---
+  Task Duration: 10271.540039us | 最长核: 10270.61us | 头开销: 0.93us (0.0%)
+
+--- Memory ---
+  GM→UB: 65536.0KB total (1365.3KB/core), BW usage: 0.06%
+  UB→GM: 65536.0KB total (1365.3KB/core), BW usage: 0.07%
+  主存读取: 65602.0KB total
+  主存写入: 65584.0KB total
+  Avg MTE2 transfer: 7.95KB (8240 instructions total)
+  GM→UB avg BW: 0.13 GB/s
+  UB→GM avg BW: 0.13 GB/s
+
+--- MemoryUB ---
+  UB read BW (scalar): avg=1.0 GB/s
+  UB write BW (scalar): avg=1.0 GB/s
+
+--- L2Cache ---
+  total_hit: avg=0.1% (min=0.1%, max=0.2%)
+  read_hit: avg=0.1% (min=0.1%, max=0.1%)
+  write_hit: avg=0.3% (min=0.3%, max=0.5%)
+  write cache: hit=384 miss=131072
+
+--- ResourceConflict ---
+  vec_total_cflt: 0.00% | bankgroup_cflt: 0.00% | bank_cflt: 0.00% | resc_cflt: 0.00% | mte_cflt: 0.00%
+  vec_wait: 0.29% | mte2_wait: 0.01% | mte3_wait: 0.01%
+
+--- ArithmeticUtilization ---
+  vec_fops: 128/core
+
+--- 原始数据位置 ---
+  CSV 文件: /root/autodl-tmp/ops_origin/operators/Complex/docs/perf/round_001/
+  如需逐核详情，请 Read 对应 CSV 文件。

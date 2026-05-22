@@ -1,11 +1,11 @@
 {
   "env": {
-    "ANTHROPIC_AUTH_TOKEN": "sk-242209ff3e054726b9952b88459acf98",
-    "ANTHROPIC_BASE_URL": "https://api.deepseek.com/anthropic",
-    "ANTHROPIC_DEFAULT_HAIKU_MODEL": "deepseek-v4-pro",
-    "ANTHROPIC_DEFAULT_OPUS_MODEL": "deepseek-v4-pro",
-    "ANTHROPIC_DEFAULT_SONNET_MODEL": "deepseek-v4-pro",
-    "ANTHROPIC_MODEL": "deepseek-v4-pro"
+    "ANTHROPIC_AUTH_TOKEN": "f6e4e4f2d3aa4c8bb32b7a8fbffaa02f.Qqb1w0qoIvM7LVMl",
+    "ANTHROPIC_BASE_URL": "https://open.bigmodel.cn/api/anthropic",
+    "ANTHROPIC_DEFAULT_HAIKU_MODEL": "glm-5.1",
+    "ANTHROPIC_DEFAULT_OPUS_MODEL": "glm-5.1",
+    "ANTHROPIC_DEFAULT_SONNET_MODEL": "glm-5.1",
+    "ANTHROPIC_MODEL": "glm-5.1"
   },
   "permissions": {
     "allow": [
@@ -50,7 +50,7 @@
       "description": "设计测试 shape + 编译验证 + 基线性能采集。",
       "tools": ["Read", "Write", "Edit", "Bash"],
       "model": "sonnet",
-      "skills": ["shape-design", "npu-architecture", "compile-and-profile"]
+      "skills": ["shape-design", "npu-architecture", "precision-verify", "perf-collection"]
     },
     "planner": {
       "description": "通读源码 + 跨 shape 性能分析 + 优化策略输出。",
@@ -68,7 +68,7 @@
       "description": "编译验证 + 精度检查 + msprof 性能采集归档 + 错误诊断修复。",
       "tools": ["Read", "Write", "Edit", "Bash", "Grep", "WebSearch"],
       "model": "sonnet",
-      "skills": ["compile-and-profile", "error-diagnosis", "npu-architecture"]
+      "skills": ["precision-verify", "perf-collection", "error-diagnosis", "npu-architecture"]
     }
   }
 }

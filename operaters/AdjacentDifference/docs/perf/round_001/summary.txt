@@ -1,0 +1,38 @@
+=== 上板性能统计摘要 ===
+Op: AdjacentDifference_kernel | Type: vector | Duration: 2.88us | BlockDim: 1 | Freq: 0/1800
+
+--- PipeUtilization (1 cores, prefix=aiv) ---
+                                  min        avg        max
+  aiv_time(us)                 2.34       2.34       2.34
+  vec_ratio%                   0.66       0.66       0.66
+  scalar_ratio%               71.88      71.88      71.88
+  mte2_ratio%                  0.05       0.05       0.05
+  mte3_ratio%                  0.05       0.05       0.05
+  icache_miss%                29.55      29.55      29.55
+
+--- 头开销 ---
+  Task Duration: 2.88us | 最长核: 2.34us | 头开销: 0.54us (18.7%)
+
+--- Memory ---
+  主存读取: 3.0KB total
+  主存写入: 1.2KB total
+
+--- MemoryUB ---
+
+--- L2Cache ---
+  total_hit: avg=70.6% (min=70.6%, max=70.6%)
+  read_hit: avg=58.3% (min=58.3%, max=58.3%)
+  write_hit: avg=100.0% (min=100.0%, max=100.0%)
+  write cache: hit=10 miss=0
+
+--- ResourceConflict ---
+  vec_total_cflt: 0.00% | bankgroup_cflt: 0.00% | bank_cflt: 0.00% | resc_cflt: 0.00% | mte_cflt: 0.00%
+  vec_wait: 0.00% | mte2_wait: 0.00% | mte3_wait: 0.00%
+
+--- ArithmeticUtilization ---
+  vec_misc: 0.7%
+  vec_fops: 128/core
+
+--- 原始数据位置 ---
+  CSV 文件: /root/autodl-tmp/ops_origin_v1/operators/AdjacentDifference/docs/perf/round_001/
+  如需逐核详情，请 Read 对应 CSV 文件。

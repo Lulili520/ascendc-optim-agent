@@ -51,11 +51,11 @@ diff op_kernel/{op}_kernel.asc op_kernel/{op}_kernel.asc.bak
 
 ## 精度阈值
 
-| dtype | rtol | atol |
-|-------|------|------|
-| FP16 | 1e-3 | 1e-4 |
-| FP32 | 1e-5 | 1e-6 |
-| INT | — | 0 |
+精度标准详见 `/precision-verify` skill。核心规则：
+
+- **浮点输出**：MERE < Threshold 且 MARE < 10×Threshold（FP16: 2^-10, FP32: 2^-13, BF16: 2^-7）
+- **整数/索引输出**：二进制一致
+- **禁止**使用 `np.allclose`
 
 ## 诊断步骤
 

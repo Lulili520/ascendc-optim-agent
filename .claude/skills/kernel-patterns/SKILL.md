@@ -194,9 +194,16 @@ __aicore__ inline void Compute(uint32_t count)
 
 ## 编码红线
 
-详见 CLAUDE.md「编码红线」节。仅限 Device 侧 `op_kernel/`，Host 端 `op_host/` 不受限制。
+仅限 Device 侧 `op_kernel/`，Host 端 `op_host/` 不受限制。
 
-## 详细参考
+- 禁止 `GlobalTensor::SetValue` / `GetValue` → 用 `DataCopyPad`
+- 禁止硬编码 `blockDim` / UB 大小 / `blockIdx` → 用 TilingData
+- 用 `DataCopyPad` 替代 `DataCopy`（除非严格 32B 对齐）
+- 禁止 `std::` 命名空间（device 侧无 C++ 标准库）
+
+详细 API 约束和黑名单见 [API 约束](references/api-constraints.md)。
+
+## 参考
 
 - [API 约束与黑名单](references/api-constraints.md)
 - [Tiling 设计与计算](references/tiling-design.md)

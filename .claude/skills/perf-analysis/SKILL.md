@@ -1,171 +1,194 @@
 ---
 name: perf-analysis
-description: NPU 性能瓶颈诊断。输入算子全部源码 + 所有 shape 的 msprof CSV，输出瓶颈类型、严重程度和按优先级排序的优化方向。供 Planner agent 使用。
+description: NPU 性能瓶颈诊断。5 步流程：源码审查 → 跨 shape 对比 → CSV 深读 → 决策树 → 策略输出。
 ---
 
 # NPU 性能瓶颈诊断
 
-## 分析流程
+## 诊断流程
 
 ```
-Step 1: 通读源码
-    ├── op_host   — 多核？Workspace？TilingData？
-    ├── op_kernel — Stage 划分？标量操作？UB 布局？
-    └── scripts   — 有哪些 shape？Golden 逻辑？
-        ↓
-Step 2: 跨 shape 对比
-    ├── 列举所有 docs/perf/round_NNN/
-    ├── 每个 round 对应一个 shape 的 msprof 结果
-    └── 共性瓶颈 vs shape 专属瓶颈
-        ↓
-Step 3: CSV 深读（对瓶颈 round）
-    ├── summary.txt      — 聚合概览，第一份读
-    ├── OpBasicInfo.csv  — Task Duration, Block Dim
-    ├── PipeUtilization  — 各单元占比，定瓶颈类型
-    ├── Memory           — 搬运量与效率
-    ├── Arithmetic       — 计算精度分布
-    └── ResourceConflict — 等待与冲突
-        ↓
-Step 4: 瓶颈判定
-    ├── 决策树定位瓶颈类型
-    ├── 关联源码定位瓶颈代码段
-    └── 估算各瓶颈时间占比
-        ↓
-Step 5: 输出策略
-    └── 优先级排序 → 预期收益 → 风险标注
+Step 1  通读算子源码 → 建立代码模型
+Step 2  跨 shape 对比 → 定位共性瓶颈
+Step 3  CSV 深读 → 提取瓶颈信号
+Step 4  决策树 → 瓶颈类型 + 源码关联
+Step 5  输出策略 → 优先级排序
 ```
 
-## Step 1：通读源码
+---
 
-**在分析任何 CSV 之前，先理解算子完整实现。**
+## Step 1：通读算子源码
 
-| 文件 | 必读关注点 | 关联瓶颈 |
-|------|----------|---------|
-| `op_host/{op}.asc` | `KernelCall` 的 blockDim 计算、workspace 大小 | BlockDim=1 / 头开销 |
-| `op_kernel/{op}_kernel.asc` | `Process()` 的 Stage 划分、各 Stage API、标量操作计数、TBuf 复用、PipeBarrier 数量 | SCALAR / VEC / 流水线气泡 |
-| `op_kernel/{op}_tiling.h` | TilingData 字段、UB_FORMER 等常量 | UB 溢出 / 头开销 |
-| `scripts/gen_data.py` | `TEST_CASES` 中 shape 的维度、数据类型 | 所有瓶颈 |
-| `run.sh` | CASE_LABELS / CASE_ARGS，了解 round_idx → shape 映射 | 跨 shape 对比时的标签 |
+**在分析任何 CSV 之前，必须先理解算子完整实现。**
+
+### 算子分类与预期分布
+
+| 类别 | 特征 | 典型预期 |
+|------|------|---------|
+| Elementwise | 输入输出 shape 相同，逐元素独立计算 | VEC 50-80%, MTE2 15-40% |
+| Reduction | 沿轴归约 | VEC 40-70%, SCALAR 可能偏高 |
+| Scan | 沿轴前缀/累积计算 | SCALAR 可能偏高（含状态依赖） |
+| Broadcast | 输入 shape 不同，广播对齐 | VEC 40-60%, MTE2 25-45% |
+| MatMul | 矩阵乘法 | CUBE 40-70%, MTE2 15-35% |
+| 纯搬运 | 仅 Copy/Cast，无计算 | MTE2+MTE3 > 70%, VEC < 10% |
+
+### 源码审查清单
+
+| 文件 | 审查重点 | 关联瓶颈 |
+|------|---------|---------|
+| `*_tiling.h` | TilingData 字段数量、UB_FORMER 等常量 | 头开销 / UB 溢出 |
+| `*_kernel.asc` | 见下方代码模式审查 | 多种瓶颈 |
+| `op_host/{op}.asc` | blockDim 计算公式、CLI 参数解析 | BlockDim=1 / 跨 shape 映射 |
+
+### 代码模式审查
+
+| 检查项 | 违规模式 | 潜在瓶颈 | 正确做法 |
+|--------|---------|---------|---------|
+| 逐元素操作 | 循环内 `GetValue(i)` / `SetValue(i)` | SCALAR Bound | `vec_*` 批量 API |
+| GlobalTensor 标量读写 | `xGm.SetValue()` / `xGm.GetValue()` | SCALAR Bound | `DataCopyPad` |
+| DataCopy 粒度 | 单次 DataCopy < 16KB | MTE2 效率低 | 增大 tile |
+| PipeBarrier 过多 | 每次 Compute 后都 PipeBarrier | 流水线气泡 | EnQue/DeQue |
+| 未使用 Double Buffer | `InitBuffer(que, 1, ...)` | 串行执行 | `InitBuffer(que, 2, ...)` |
+| 重复读 GM | 同一段数据多次 DataCopy 到 UB | MTE2 Bound | 缓存复用 |
+| 硬编码参数 | `blockDim = 20`、`UB_SIZE = 192*1024` | 不可移植 | TilingData |
+| FP16 累积 | Reduce/累加用 half 类型 | 精度风险 | FP32 累积 |
+| Tail 缺失 | 最后 tile 未用实际 count | 越界 | 动态计算 tail |
+| repeat 超限 | repeat 参数 > 255 | 静默截断 | Host 限制 |
+
+---
 
 ## Step 2：跨 shape 对比
 
-对每个 round 读 `summary.txt`，提取 Task Duration 和主要瓶颈信号，填入对比表：
+从 `round_{N-1}/msprof/shape_N/summary.txt` 提取关键字段填写对比表：
 
-| Shape | Task Duration | scalar_ratio | vec_ratio | mte2_ratio | Block Dim | 定级 |
-|-------|--------------|-------------|-----------|-----------|-----------|------|
-| case1 (小) | ... us | ...% | ...% | ...% | ... | — |
-| case2 (大) | ... us | ...% | ...% | ...% | ... | — |
+| shape | name | Task Duration | scalar | vec | mte2 | mte3 | Block Dim | 定级 |
+|-------|------|:---:|:---:|:---:|:---:|:---:|:---:|------|
+| 0 | boundary | xxx us | xx% | xx% | xx% | xx% | N | — |
+| 1 | small | xxx us | xx% | xx% | xx% | xx% | N | — |
+| 2 | large | xxx us | xx% | xx% | xx% | xx% | N | — |
 
-**判定逻辑**：
+### 跨 shape 模式
 
-| 跨 shape 模式 | 结论 | 动作 |
-|-------------|------|------|
-| 所有 shape 同一瓶颈 | 共性瓶颈 | 优先解决，所有 shape 受益 |
-| 大 shape 严重、小 shape 正常 | Tiling/搬运 问题 | 增大 tile、增大搬运粒度 |
-| 小 shape 严重、大 shape 正常 | 头开销问题 | 减少核数、缩小 TilingData |
-| 小 shape scalar_ratio 高、大 shape 正常 | 头开销摊不薄 | 正常现象，非瓶颈 |
+| 模式 | 含义 | 动作 |
+|------|------|------|
+| 所有 shape 同一瓶颈 | 共性瓶颈 | 最高优先级 |
+| 大 shape 严重、小 shape 正常 | 数据量暴露的问题 | 增大 tile / 搬运粒度 |
+| 小 shape 严重、大 shape 正常 | 头开销摊不薄 | 可忽略 |
 | 大 shape scalar_ratio 仍高 | 计算标量化 | 必须向量化 |
+| BlockDim 随 shape 变化 | 多核未全部启用 | 检查 host 端切分 |
+
+---
 
 ## Step 3：CSV 深读
 
-选定瓶颈最严重的 round，按顺序读 CSV。各文件列含义详见 [性能指标详解](references/metrics-guide.md)。
+选定最严重 shape，按顺序读取：
 
-**读取顺序与核心信号**：
+| 顺序 | CSV | 核心信号 |
+|:---:|-----|---------|
+| 1 | `summary.txt` | 聚合概览 |
+| 2 | `OpBasicInfo.csv` | Task Duration, Block Dim, Freq |
+| 3 | `PipeUtilization.csv` | **最关键** — vec/scalar/mte2/mte3/icache_miss |
+| 4 | `Memory.csv` | 搬运量、带宽利用率 |
+| 5 | `ArithmeticUtilization.csv` | vec_fp32/fp16/misc 分布 |
+| 6 | `ResourceConflictRatio.csv` | vec_wait/mte2_wait/bankgroup_cflt |
 
-| CSV 文件 | 只看这几列 | 判定信号 |
-|---------|----------|---------|
-| `OpBasicInfo.csv` | Task Duration, Block Dim | BlockDim=1 → 多核未启用 |
-| `PipeUtilization.csv` | vec_ratio, scalar_ratio, mte2_ratio, mte3_ratio, icache_miss | scalar>40% → SCALAR；vec<30% → VEC 闲置 |
-| `Memory.csv` | GM_to_UB_datas, mte2_instructions, bw_usage_rate | bw 低+mte2 高 → tile 过小 |
-| `ArithmeticUtilization.csv` | vec_fp32_ratio, vec_fp16_ratio, vec_misc_ratio, vec_fops | misc>fp32 → Cast 过多 |
-| `ResourceConflictRatio.csv` | vec_wait, mte2_wait, mte3_wait, bankgroup_cflt | vec_wait>10% → 等数据 |
+### 关键阈值
 
-> 阈值速查表和各 CSV 列完整释义在 [性能指标详解](references/metrics-guide.md)。
+| ratio | 正常 | 警告 | 严重 |
+|-------|------|------|------|
+| scalar_ratio | < 20% | 20-30% | > 30% |
+| mte2_ratio（计算型） | < 25% | 25-35% | > 35% |
+| icache_miss | < 3% | 3-10% | > 15% |
+| vec_wait / mte2_wait | < 5% | 5-10% | > 10% |
+| bankgroup_cflt | < 0.5% | 0.5-1% | > 1% |
 
-## Step 4：瓶颈决策树
+> CSV 每列详细含义见 [性能指标详解](references/metrics-guide.md)。
+> 理论耗时计算公式见 [性能指标详解](references/metrics-guide.md) 中 Roofline 章节。
+
+---
+
+## Step 4：瓶颈判定
+
+按优先级从高到低检查，**命中即停止**：
 
 ```
-拿所有 round 的 summary.txt
-    │
-    ▼
-任一 shape 的 Block Dim = 1 且总数据量 > 2048？
-    ├─ 是 → BlockDim=1（最大瓶颈）
-    │       动作：检查 Host 端 blockNum 计算逻辑
-    │
-    ▼
-任一 shape 的 scalar_ratio > 40%？
-    ├─ 是 → SCALAR Bound
-    │       定位：kernel 源码中 GetValue/SetValue 的循环层数和调用次数
-    │       动作：消除 GlobalTensor::SetValue/GetValue，用 DataCopyPad 批量替代
-    │
-    ▼
+Block Dim = 1 且总数据量 > 2048？
+├─ 是 → ★ BlockDim=1 → 修改 Host 切分公式
+
+scalar_ratio > 40%？
+├─ 是 → ★ SCALAR Bound（严重）→ 用 vec_* 或 DataCopyPad 替代标量操作
+
 scalar_ratio > 30% 且 vec_ratio < 30%？
-    ├─ 是 → SCALAR 偏高（轻量）
-    │       动作：检查是否有可消除的标量操作，降低 TilingData 大小
-    │
-    ▼
-vec_ratio < 30% 且 scalar_ratio < 30%？
-    ├─ 是 → 未归类耗时（stall/idle）
-    │       动作：检查 PipeBarrier 是否过多、Stage 间是否有空闲段
-    │
-    ▼
+├─ 是 → ★ SCALAR Bound（轻量）→ 缩小 TilingData / 外提不变量
+
 mte2_ratio + mte3_ratio > 40%？
-    ├─ 是 → 搬运 Bound
-    │       计算：理论 = 搬运量 / 峰值带宽，实际 = mte2_time
-    │       实际 ≈ 理论 → 已达带宽上限，做流水线重叠
-    │       实际 >> 理论 → 搬运效率低，增大粒度 / 检查对齐
-    │
-    ▼
+├─ 是 → ★ 搬运 Bound → 对比理论带宽，已达上限则做流水线重叠
+
+vec_ratio > 50%？
+├─ 是 → ★ VEC Bound → 50-65% UB融合 / 65-80% 减Cast+融合 / >80% 接近上限
+
 vec_wait > 10% 或 mte2_wait > 10%？
-    ├─ 是 → 流水线气泡
-    │       动作：增加 buffer 份数 / 异步预取
-    │
-    ▼
+├─ 是 → ★ 流水线气泡 → Double Buffer / 异步预取
+│        特殊：mte2_wait = 0% 说明完全串行
+
 icache_miss > 15%？
-    ├─ 是 → 指令缓存
-    │       动作：循环展开 / 精简 Compute()
-    │
-    ▼
+├─ 是 → ★ 指令缓存 → 循环展开 / 精简 Compute()
+
 bankgroup_cflt > 1%？
-    ├─ 是 → Bank 冲突
-    │       动作：UB padding / 调整访问步长
-    │
-    ▼
-L2 read_hit < 50%（仅数据量 > 100KB 时有效）？
-    ├─ 是 → 局部性差
-    │       动作：增大 tile / 调整访问顺序
-    │
-    ▼
-无明显瓶颈 → 计算理论耗时 vs roofline，接近则停止
+├─ 是 → ★ Bank 冲突 → UB padding / 调整步长
+
+L2 read_hit < 50%（数据量 > 100KB）？
+├─ 是 → ★ 局部性差 → 增大 tile / SetL2CacheMode
+
+核间负载不均（各核 aiv_time 差异 > 10%）？
+├─ 是 → ★ 负载不均 → 调整 BLOCK_ALIGN
+
+无明显瓶颈 → 理论耗时接近 roofline → 建议停止
 ```
 
-瓶颈→优化方向的详细方法在 [优化速查表](references/optimization-quickref.md)。
+### 代码模式 → 瓶颈快速映射
+
+| 代码模式 | 预期瓶颈 |
+|---------|---------|
+| 循环内 `GetValue(i)` / `SetValue(i)` | SCALAR Bound |
+| `DataCopy(xLocal, xGm, small_count)` 循环 | MTE2 效率低 |
+| `InitBuffer(que, 1, size)` | 串行执行 |
+| `PipeBarrier<PIPE_ALL>` 频繁 | 流水线气泡 |
+| 无预取的串行 CopyIn→Compute→CopyOut | 串行执行 |
+| Compute 内频繁 `Cast(fp32, x)` | VEC misc 偏高 |
+| TilingData 字段 > 20 个 | 头开销大 |
+
+> 详细优化方法见 [优化速查表](references/optimization-quickref.md)。
+> 典型诊断案例见 [瓶颈案例](references/bottleneck-cases.md)。
+
+---
 
 ## Step 5：输出策略
 
-策略必须包含以下字段：
+### 策略字段
 
 | 字段 | 说明 |
 |------|------|
-| 优先级 | P1（必须做）> P2（建议做）> P3（锦上添花） |
-| 瓶颈定位 | 哪个 shape、哪个 Stage、源码哪几行 |
-| 优化方案 | 具体改什么文件、改什么内容 |
-| 预期收益 | Task Duration 改善百分比 |
-| 适用 shape | 所有 shape 有效 / 仅大 shape / 仅小 shape |
-| 风险 | 精度风险 / UB 溢出风险 / API 不可用风险 |
+| **优先级** | P1（必须做）> P2（建议做）> P3（锦上添花） |
+| **瓶颈定位** | 哪个 shape、源码哪几行、什么瓶颈类型 |
+| **优化方案** | 具体改什么、改成什么（附代码模式引用） |
+| **预期收益** | Task Duration 改善百分比 |
+| **适用 shape** | 所有 / 仅 large / 仅 small |
+| **风险** | 精度风险 / UB 溢出 / API 限制 |
 
-**优先级规则**（从高到低）：
+### 优先级规则
 
-1. **多核启用** — 跨所有 shape，收益最大
-2. **共性 SCALAR Bound** — 所有 shape 受益
-3. **大 shape 搬运瓶颈** — 仅大数据量暴露
-4. **小 shape 头开销** — 仅小数据量暴露
-5. **流水线气泡 / Bank 冲突** — 微调级别
+1. **多核启用**（BlockDim=1）— 收益最大
+2. **消除 SCALAR Bound** — 所有 shape 受益
+3. **搬运瓶颈** — 增大粒度 + 流水线重叠
+4. **流水线气泡** — Double Buffer / 三级流水线
+5. **头开销** — 缩小 TilingData / 减少核数
+6. **Bank 冲突 / L2 局部性** — 微调级别
 
 ## 参考文档
 
 | 文档 | 内容 | 何时读 |
 |------|------|--------|
-| [性能指标详解](references/metrics-guide.md) | 8 CSV + summary.txt 每列含义、阈值速查、算子类型预期分布 | Step 3 深入读 CSV 时 |
-| [优化速查表](references/optimization-quickref.md) | 每种瓶颈的详细优化方法、代码模板、预期收益 | Step 5 制定策略时 |
-| [典型瓶颈案例](references/bottleneck-cases.md) | 真实算子的瓶颈诊断过程 | 遇到类似症状时对照 |
+| [性能指标详解](references/metrics-guide.md) | 8 CSV 每列含义、阈值速查、理论耗时公式 | Step 3 深读 CSV 时 |
+| [优化速查表](references/optimization-quickref.md) | 每种瓶颈的详细优化方法 | Step 5 制定策略时 |
+| [典型瓶颈案例](references/bottleneck-cases.md) | 真实算子的诊断过程 | 遇到类似症状时 |

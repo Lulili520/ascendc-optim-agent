@@ -1,0 +1,182 @@
+#include "kernel_operator.h"
+#include "Cummin_tiling.h"
+
+using namespace AscendC;
+
+constexpr uint32_t IDX_BATCH = 4;
+constexpr uint32_t MAX_TILE = 512;
+
+class KernelCummin {
+public:
+    __aicore__ inline KernelCummin(TPipe* pipe) : pipe_(pipe) {}
+
+    __aicore__ inline void Init(GM_ADDR x, GM_ADDR y, GM_ADDR argmin,
+                                const __gm__ CumminTilingData* tiling)
+    {
+        dim_ = tiling->dim;
+        B_ = tiling->B;
+        T_ = tiling->T;
+        F_ = tiling->F;
+        tileLen_ = tiling->tileLen;
+        numFTiles_ = (F_ + tileLen_ - 1) / tileLen_;
+
+        uint32_t blockIdx = GetBlockIdx();
+        uint32_t laneGroups = tiling->laneGroupsPerCore;
+        if (blockIdx == tiling->blockNum - 1) {
+            laneGroups = tiling->tailLaneGroupsLastCore;
+        }
+        laneStart_ = blockIdx * tiling->laneGroupsPerCore;
+        laneEnd_ = laneStart_ + laneGroups;
+
+        xGm.SetGlobalBuffer((__gm__ half*)x);
+        yGm.SetGlobalBuffer((__gm__ half*)y);
+        idxGm.SetGlobalBuffer((__gm__ int64_t*)argmin);
+
+        pipe_->InitBuffer(inQue, 1, tileLen_ * sizeof(half));
+        pipe_->InitBuffer(idxOutQue, 1, IDX_BATCH * sizeof(int64_t));
+    }
+
+    __aicore__ inline void Process()
+    {
+        for (uint32_t lane = laneStart_; lane < laneEnd_; lane++) {
+            if (dim_ == 2) {
+                // dim=2: scan along F axis. Each lane = one (bIdx, tIdx).
+                // Process in IDX_BATCH sub-batches to avoid per-element arrays.
+                uint32_t bIdx = lane / T_;
+                uint32_t tIdx = lane % T_;
+                half rMin = (half)65504.0f;
+                int32_t rIdx = 0;
+                uint64_t baseOff = (uint64_t)bIdx * T_ * F_ + tIdx * F_;
+
+                for (uint32_t f = 0; f < F_; f += IDX_BATCH) {
+                    uint32_t bc = (f + IDX_BATCH <= F_) ? IDX_BATCH : (F_ - f);
+                    uint64_t gmOff = baseOff + f;
+
+                    LocalTensor<half> inLocal = inQue.AllocTensor<half>();
+                    DataCopyPad(inLocal, xGm[gmOff],
+                        {1, static_cast<uint16_t>(bc * sizeof(half)), 0, 0},
+                        {false, 0, 0, 0});
+                    inQue.EnQue(inLocal);
+                    LocalTensor<half> xLocal = inQue.DeQue<half>();
+
+                    int32_t bi[IDX_BATCH];
+                    for (uint32_t j = 0; j < bc; j++) {
+                        half val = xLocal.GetValue(j);
+                        float vf = val;
+                        float mf = rMin;
+                        if (vf < mf) {
+                            rMin = val;
+                            rIdx = (int32_t)(f + j);
+                        }
+                        xLocal.SetValue(j, rMin);
+                        bi[j] = rIdx;
+                    }
+
+                    DataCopyPad(yGm[gmOff], xLocal,
+                        {1, static_cast<uint16_t>(bc * sizeof(half)), 0, 0});
+                    PipeBarrier<PIPE_ALL>();
+                    inQue.FreeTensor(xLocal);
+
+                    LocalTensor<int64_t> idxLocal = idxOutQue.AllocTensor<int64_t>();
+                    for (uint32_t j = 0; j < bc; j++) {
+                        idxLocal.SetValue(j, (int64_t)bi[j]);
+                    }
+                    idxOutQue.EnQue(idxLocal);
+                    LocalTensor<int64_t> idxReady = idxOutQue.DeQue<int64_t>();
+                    DataCopyPad(idxGm[gmOff], idxReady,
+                        {1, static_cast<uint16_t>(bc * sizeof(int64_t)), 0, 0});
+                    idxOutQue.FreeTensor(idxReady);
+                    PipeBarrier<PIPE_ALL>();
+                }
+            } else {
+                // dim=0: scan along B, outer = tIdx
+                // dim=1: scan along T, outer = bIdx
+                uint32_t outerIdx = lane / numFTiles_;
+                uint32_t fGroup = lane % numFTiles_;
+                uint32_t scanDim = (dim_ == 0) ? 0u : 1u;
+
+                uint32_t fStart = fGroup * tileLen_;
+                uint32_t fCount = (fStart + tileLen_ <= F_) ? tileLen_ : (F_ - fStart);
+                uint32_t scanLen = (scanDim == 0) ? B_ : T_;
+
+                half runningMin[MAX_TILE];
+                int32_t runningIdx[MAX_TILE];
+                for (uint32_t f = 0; f < fCount; f++) {
+                    runningMin[f] = (half)65504.0f;
+                    runningIdx[f] = 0;
+                }
+
+                for (uint32_t step = 0; step < scanLen; step++) {
+                    uint64_t offset;
+                    if (scanDim == 0) {
+                        offset = (uint64_t)step * T_ * F_ + outerIdx * F_ + fStart;
+                    } else {
+                        offset = (uint64_t)outerIdx * T_ * F_ + step * F_ + fStart;
+                    }
+
+                    LocalTensor<half> inLocal = inQue.AllocTensor<half>();
+                    DataCopyPad(inLocal, xGm[offset],
+                        {1, static_cast<uint16_t>(fCount * sizeof(half)), 0, 0},
+                        {false, 0, 0, 0});
+                    inQue.EnQue(inLocal);
+                    LocalTensor<half> xLocal = inQue.DeQue<half>();
+
+                    for (uint32_t f = 0; f < fCount; f++) {
+                        half val = xLocal.GetValue(f);
+                        float vf = val;
+                        float mf = runningMin[f];
+                        if (vf < mf) {
+                            runningMin[f] = val;
+                            runningIdx[f] = (int32_t)step;
+                            xLocal.SetValue(f, val);
+                        } else {
+                            xLocal.SetValue(f, runningMin[f]);
+                        }
+                    }
+
+                    DataCopyPad(yGm[offset], xLocal,
+                        {1, static_cast<uint16_t>(fCount * sizeof(half)), 0, 0});
+                    PipeBarrier<PIPE_ALL>();
+                    inQue.FreeTensor(xLocal);
+
+                    for (uint32_t bs = 0; bs < fCount; bs += IDX_BATCH) {
+                        uint32_t bc = (bs + IDX_BATCH <= fCount) ? IDX_BATCH : (fCount - bs);
+                        LocalTensor<int64_t> idxLocal = idxOutQue.AllocTensor<int64_t>();
+                        for (uint32_t j = 0; j < bc; j++) {
+                            idxLocal.SetValue(j, (int64_t)runningIdx[bs + j]);
+                        }
+                        idxOutQue.EnQue(idxLocal);
+                        LocalTensor<int64_t> idxReady = idxOutQue.DeQue<int64_t>();
+                        DataCopyPad(idxGm[offset + bs], idxReady,
+                            {1, static_cast<uint16_t>(bc * sizeof(int64_t)), 0, 0});
+                        idxOutQue.FreeTensor(idxReady);
+                        PipeBarrier<PIPE_ALL>();
+                    }
+                }
+            }
+        }
+    }
+
+private:
+    TPipe* pipe_;
+    TQue<QuePosition::VECIN, 1> inQue;
+    TQue<QuePosition::VECOUT, 1> idxOutQue;
+
+    GlobalTensor<half> xGm;
+    GlobalTensor<half> yGm;
+    GlobalTensor<int64_t> idxGm;
+
+    uint32_t dim_;
+    uint32_t B_, T_, F_;
+    uint32_t tileLen_;
+    uint32_t numFTiles_;
+    uint32_t laneStart_, laneEnd_;
+};
+
+extern "C" __global__ __aicore__ void Cummin_kernel(GM_ADDR x, GM_ADDR y, GM_ADDR argmin, GM_ADDR tiling)
+{
+    TPipe pipe;
+    KernelCummin op(&pipe);
+    op.Init(x, y, argmin, (__gm__ CumminTilingData*)tiling);
+    op.Process();
+}

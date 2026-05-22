@@ -1,0 +1,47 @@
+=== 上板性能统计摘要 ===
+Op: Cummin_kernel | Type: vector | Duration: 3.92us | BlockDim: 1 | Freq: 0/1800
+
+--- PipeUtilization (1 cores, prefix=aiv) ---
+                                  min        avg        max
+  aiv_time(us)                 3.40       3.40       3.40
+  vec_ratio%                   0.46       0.46       0.46
+  scalar_ratio%               59.70      59.70      59.70
+  mte2_ratio%                  6.12       6.12       6.12
+  mte3_ratio%                  7.64       7.64       7.64
+  icache_miss%                14.89      14.89      14.89
+  mte2_active_bw                0.6        0.6        0.6    (GB/s)
+  mte3_active_bw                0.9        0.9        0.9    (GB/s)
+
+--- 头开销 ---
+  Task Duration: 3.92us | 最长核: 3.40us | 头开销: 0.52us (13.2%)
+
+--- Memory ---
+  GM→UB: 0.1KB total (0.1KB/core), BW usage: 0.02%
+  UB→GM: 0.2KB total (0.2KB/core), BW usage: 0.04%
+  主存读取: 4.8KB total
+  主存写入: 1.8KB total
+  Avg MTE2 transfer: 0.06KB (2 instructions total)
+  GM→UB avg BW: 0.04 GB/s
+  UB→GM avg BW: 0.07 GB/s
+
+--- MemoryUB ---
+  UB read BW (scalar): avg=0.0 GB/s
+  UB write BW (scalar): avg=0.1 GB/s
+
+--- L2Cache ---
+  total_hit: avg=71.2% (min=71.2%, max=71.2%)
+  read_hit: avg=65.8% (min=65.8%, max=65.8%)
+  write_hit: avg=85.7% (min=85.7%, max=85.7%)
+  write cache: hit=12 miss=2
+
+--- ResourceConflict ---
+  vec_total_cflt: 0.00% | bankgroup_cflt: 0.00% | bank_cflt: 0.00% | resc_cflt: 0.00% | mte_cflt: 0.00%
+  vec_wait: 4.44% | mte2_wait: 0.21% | mte3_wait: 0.96%
+
+--- ArithmeticUtilization ---
+  vec_misc: 0.5%
+  vec_fops: 128/core
+
+--- 原始数据位置 ---
+  CSV 文件: /root/autodl-tmp/ll/ascendc-optim-agent/log/Cummin/round_004/msprof/shape_0/
+  如需逐核详情，请 Read 对应 CSV 文件。

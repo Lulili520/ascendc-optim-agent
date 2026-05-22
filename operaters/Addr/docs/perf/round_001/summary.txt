@@ -1,0 +1,38 @@
+=== 上板性能统计摘要 ===
+Op: Addr_kernel | Type: vector | Duration: 3.26us | BlockDim: 1 | Freq: 0/1800
+
+--- PipeUtilization (1 cores, prefix=aiv) ---
+                                  min        avg        max
+  aiv_time(us)                 2.73       2.73       2.73
+  vec_ratio%                   0.82       0.82       0.82
+  scalar_ratio%               73.59      73.59      73.59
+  mte2_ratio%                  0.04       0.04       0.04
+  mte3_ratio%                  0.04       0.04       0.04
+  icache_miss%                17.00      17.00      17.00
+
+--- 头开销 ---
+  Task Duration: 3.26us | 最长核: 2.73us | 头开销: 0.53us (16.4%)
+
+--- Memory ---
+  主存读取: 3.2KB total
+  主存写入: 1.0KB total
+
+--- MemoryUB ---
+
+--- L2Cache ---
+  total_hit: avg=73.5% (min=73.5%, max=73.5%)
+  read_hit: avg=65.4% (min=65.4%, max=65.4%)
+  write_hit: avg=100.0% (min=100.0%, max=100.0%)
+  write cache: hit=8 miss=0
+
+--- ResourceConflict ---
+  vec_total_cflt: 0.00% | bankgroup_cflt: 0.00% | bank_cflt: 0.00% | resc_cflt: 0.00% | mte_cflt: 0.00%
+  vec_wait: 0.00% | mte2_wait: 0.00% | mte3_wait: 0.00%
+
+--- ArithmeticUtilization ---
+  vec_misc: 0.8%
+  vec_fops: 128/core
+
+--- 原始数据位置 ---
+  CSV 文件: /root/autodl-tmp/ops_origin_v1/operators/Addr/docs/perf/round_001/
+  如需逐核详情，请 Read 对应 CSV 文件。

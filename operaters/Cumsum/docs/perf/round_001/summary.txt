@@ -1,0 +1,46 @@
+=== 上板性能统计摘要 ===
+Op: Cumsum_kernel | Type: vector | Duration: 310.399994us | BlockDim: 8 | Freq: 0/1800
+
+--- PipeUtilization (8 cores, prefix=aiv) ---
+                                  min        avg        max
+  aiv_time(us)               306.58     308.13     309.70
+  vec_ratio%                  15.63      15.71      15.79
+  scalar_ratio%               35.73      35.86      36.01
+  mte2_ratio%                 78.80      78.87      78.92
+  mte3_ratio%                 39.31      41.04      43.16
+  mte2_active_bw                2.0        2.0        2.0    (GB/s)
+  mte3_active_bw                3.7        3.9        4.0    (GB/s)
+
+--- 头开销 ---
+  Task Duration: 310.399994us | 最长核: 309.70us | 头开销: 0.70us (0.2%)
+
+--- Memory ---
+  GM→UB: 4096.0KB total (512.0KB/core), BW usage: 0.72%
+  UB→GM: 4096.0KB total (512.0KB/core), BW usage: 0.85%
+  主存读取: 4108.0KB total
+  主存写入: 4105.0KB total
+  Avg MTE2 transfer: 0.50KB (8200 instructions total)
+  GM→UB avg BW: 1.58 GB/s
+  UB→GM avg BW: 1.58 GB/s
+
+--- MemoryUB ---
+  UB read BW (vector): avg=11.1 GB/s
+  UB write BW (vector): avg=7.9 GB/s
+
+--- L2Cache ---
+  total_hit: avg=0.3% (min=0.3%, max=0.4%)
+  read_hit: avg=0.2% (min=0.2%, max=0.2%)
+  write_hit: avg=0.9% (min=0.9%, max=0.9%)
+  write cache: hit=72 miss=8192
+
+--- ResourceConflict ---
+  vec_total_cflt: 0.74% | bankgroup_cflt: 0.74% | bank_cflt: 0.00% | resc_cflt: 0.00% | mte_cflt: 0.00%
+  vec_wait: 89.79% | mte2_wait: 99.15% | mte3_wait: 99.73%
+
+--- ArithmeticUtilization ---
+  vec_fp32: 6.6% | vec_misc: 7.4%
+  vec_fops: 819584/core
+
+--- 原始数据位置 ---
+  CSV 文件: /root/autodl-tmp/ops_origin/operators/Cumsum/docs/perf/round_001/
+  如需逐核详情，请 Read 对应 CSV 文件。

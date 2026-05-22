@@ -1,118 +1,91 @@
 ---
 name: shape-design
-description: 为 AscendC 算子设计覆盖边界和常见场景的测试 shape。供 Shaper agent 使用。
+description: 为 AscendC 算子设计 3 类测试 shape（boundary/small/large），基于算子分类和 tiling 约束推导边界值。
 ---
 
 # 测试 Shape 设计
 
-## 概述
+## 设计目标
 
-为算子设计多组输入 shape，覆盖边界情况和常见场景，确保性能分析有足够的覆盖度。
+为算子设计 **3 类测试 shape**，每类至少 1 个：
 
-## 设计原则
+| 类别 | 代号 | 目的 | 核心约束 |
+|------|------|------|---------|
+| **边界** | `boundary` | 触发 tail/非对齐/单核等边界逻辑 | 至少命中一条 kernel 分支 |
+| **常见小** | `small` | 模拟典型推理请求 | 主流网络小规模张量 |
+| **常见大** | `large` | 多核扩展，暴露性能瓶颈 | blockDim > 1 |
 
-### 三类 Shape
+## 算子分类与关注点
 
-| 类别 | 目的 | 最少数量 |
-|------|------|---------|
-| **边界** | 触发 tail 分支、非对齐路径、单 tile、BlockDim=1 等边界逻辑 | 2-3 |
-| **常见小** | 模拟典型推理请求（B=1，小尺寸） | 1 |
-| **常见大** | 压力测试、多核扩展验证、带宽饱和 | 1 |
+| 类别 | 特征 | shape 关注维度 |
+|------|------|---------------|
+| Elementwise | 逐元素独立计算 | 总元素数（多核切分、UB 循环） |
+| Reduction | 沿轴归约 | 归约轴 R、保留轴 A |
+| Scan | 沿轴前缀/累积 | 扫描轴长度、dim 选择 |
+| Broadcast | 广播对齐 | 广播源维度与目标维度 |
+| Conversion | 布局/形状变换 | 源和目标的维度映射 |
+| MatMul | 矩阵乘法 | M, N, K |
 
-### 边界 Shape 清单
+## 设计流程
 
-| 边界类型 | 说明 | 示例 |
-|---------|------|------|
-| 最小值 | 所有维度取最小合法值 | B=1, N1=1, D=1 |
-| 非对齐 | 维度非 32B 对齐，触发 DataCopyPad tail 分支 | D=127 或 count=2047 |
-| Tile 边界 | 数据量刚好填满或超出一个 tile | count = UB_FORMER 或 UB_FORMER+1 |
-| 单 batch 极限 | B=1 但其他维度很大，测单 batch 的极限吞吐 | B=1, S2=8192, D=128 |
+### Step 1：源码约束提取
 
-### 常见 Shape 清单
+| 文件 | 提取内容 |
+|------|---------|
+| `*_tiling.h` | tiling 常量（UB_FORMER、BLOCK_ALIGN 等） |
+| `*_kernel.asc` | tile 循环、tail 分支、dim 路径、UB buffer 分配 |
+| `op_host/{op}.asc` | blockDim 公式、CLI 参数解析 |
+| `scripts/gen_data.py` | 参数格式（名称、顺序、含义） |
 
-| 场景 | 说明 | 示例 |
-|------|------|------|
-| 推理小 batch | B=1，单请求，低延迟场景 | B=1, S1=1, N1=64, D=128 |
-| 训练中 batch | B=4-8，中等规模 | B=4, S1=128, N1=128, D=256 |
-| 大吞吐 | B 较大，S/D 中等，测多核扩展 | B=8, S1=4096, N1=64, D=128 |
+提取清单：
 
-## 设计步骤
-
-### 1. 读算子源码确定约束
-
-| 文件 | 提取信息 | 影响 shape 的维度 |
-|------|---------|-----------------|
-| `op_host/{op}.asc` | blockDim 计算公式、shape 查找表结构 | 影响 Block Dim 判定；定位需更新的查找表 |
-| `op_kernel/{op}_kernel.asc` | tile 循环、tail 处理、UB 分配 | 非对齐边界应命中 tail 分支 |
-| `op_kernel/{op}_tiling.h` | UB_FORMER、CHUNK_SIZE 等常量 | Tile 边界应取 UB_FORMER ± 1 |
-| `scripts/gen_data.py` | 现有 TEST_CASES 格式 | 保持字段名和结构一致 |
-| `run.sh` | CASE_NAMES / CASE_DIMS / CASE_ARGS 等数组格式 | 保持格式一致 |
-
-### 2. 推导边界值
-
-以 Elementwise 算子为例：
-- 对齐：D=128（128×2B=256B，32B 对齐）
-- 非对齐：D=127（254B，非 32B 对齐）
-- Tile 满：count = UB_FORMER
-- Tile 尾：count = UB_FORMER - 1 或 1
-
-以 LightningIndexer 为例：
-- S2 非对齐 block_size：S2=8191（不整除 block_size=256）
-- 大 S2：S2=32768（多 block、多 chunk）
-
-### 3. 同步更新三个文件
-
-Shape 定义分散在三个文件中，设计完成后**必须全部同步更新**：
-
-#### 3a. 更新 `run.sh`
-
-```bash
-# 更新 CASE 系列数组，保持长度一致
-CASE_NAMES=("boundary_tail" "boundary_tile" "common_small" "common_large")
-CASE_DIMS=(<dim0_val> <dim1_val> <dim2_val> <dim3_val>)        # 按 run.sh 原有格式
-CASE_LABELS=("[B=1,D=127]" "[B=1,D=128]" "[B=1,D=64]" "[B=8,D=256]")
-CASE_ARGS=("<args0>" "<args1>" "<args2>" "<args3>")             # 传给二进制的参数
+```
+[ ] 算子类别
+[ ] 输入维度描述（参数个数、含义）
+[ ] Tiling 常量及其值
+[ ] 对齐要求（32B / 256B / 512 元素）
+[ ] 关键分支（dim 路径、tail vs 对齐）
+[ ] blockDim 公式
+[ ] UB buffer 分配（buffer 数量、各大小）
 ```
 
-> 注意：不同算子的 run.sh 格式可能不同（有的用 CASE_DIMS，有的用 CASE_ARGS），
-> 应保持与原有格式一致。
+### Step 2：边界值推导
 
-#### 3b. 更新 `scripts/gen_data.py`
+从 tiling 常量和 kernel 代码推导边界数值：
 
-```python
-TEST_CASES = [
-    # === 边界 ===
-    {"name": "boundary_tail",   "shape": {...}},   # 非对齐 / tail
-    {"name": "boundary_tile",   "shape": {...}},   # tile 边界
-    # === 常见小 ===
-    {"name": "common_small",    "shape": {...}},   # 推理典型
-    # === 常见大 ===
-    {"name": "common_large",    "shape": {...}},   # 压力测试
-]
-```
+| 边界类型 | 推导方法 |
+|---------|---------|
+| 对齐边界 | 关键维度 % tileLen == 0 → 全对齐路径 |
+| 非对齐边界 | 关键维度 % tileLen ≠ 0 → 触发 tail 分支 |
+| 多核边界 | 计算得到的 blockNum > 1 |
+| UB 边界 | elemCount = tiling 常量值（满）或常量值 - 1（尾） |
 
-> 注意：不同算子的 gen_data.py 格式可能不同（有的用 TEST_CASES 元组，
-> 有的用 test_cases 字典），应保持与原有格式一致。
+### Step 3：设计 3 类 Shape
 
-#### 3c. 更新 `op_host/{op}.asc` 的 shape 查找表
+**boundary**：从 Step 2 推导的边界值中选取，命中至少一条 kernel 特殊分支。
 
-```cpp
-// 示例（Erfc）：单维度 shape 查找表
-static const uint64_t shapeDim0[] = {dim0_val_0, dim0_val_1, dim0_val_2, dim0_val_3};
-static const int numShapes = 4;
+**small**：模拟主流网络小规模张量。参考值见 [网络 Shape 参考](references/network-shapes.md) 小规模表。
 
-// 示例（Cummin）：多维度 shape 查找表
-static const uint32_t shapeBTF[][3] = {{B0,T0,F0}, {B1,T1,F1}, {B2,T2,F2}, {B3,T3,F3}};
-static const int numShapes = 4;
-```
+**large**：多核扩展，**必须 blockDim > 1**。参考值见 [网络 Shape 参考](references/network-shapes.md) 大规模表。
 
-> 注意：有些算子的 host 代码没有 shape 查找表（直接用 argc/argv 解析参数），
-> 这种情况只需更新 run.sh 和 gen_data.py 两个文件。
+## 归档
+
+将 3 个 shape 的完整参数写入 `shapes.md`，供后续 Agent 直接读取调用。
+
+## 质量检查
+
+| 检查项 | 通过条件 |
+|--------|---------|
+| 数量 | ≥ 3（boundary + small + large 各 ≥ 1） |
+| 分支覆盖 | boundary 命中至少一条关键 if/else |
+| 非对齐 | boundary 至少一个维度触发 tail |
+| 多核 | large 的 blockDim > 1 |
+| UB 安全 | 所有 shape 的 UB 总占用 ≤ 芯片容量 |
 
 ## 规则
 
-1. 最少 4 个 shape（边界 ≥2、常见小 ≥1、常见大 ≥1）
-2. 边界 shape 必须有至少一个触发 tail/非对齐分支
-3. 常见 large shape 的数据量应足以启用多核（BlockDim > 1）
-4. 所有 shape 必须与算子 kernel 的计算逻辑兼容
-5. shape 命名使用 `boundary_*` / `common_*` 前缀区分分类
+1. 先读源码再设计 shape
+2. boundary 必须命中 kernel 边界分支
+3. large 必须启用多核（blockDim > 1）
+4. 设计完成后写入 shapes.md，供 Agent 通过命令行传递参数
+5. 所有 shape 精度 PASS 后才能进入性能采集

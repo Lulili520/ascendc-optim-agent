@@ -1,0 +1,1 @@
+/usr/local/Ascend/cann-8.5.0/bin/bisheng CMakeFiles/Cummin.dir/op_host/Cummin.asc.o -o Cummin  -ltiling_api -lregister -lplatform -lunified_dlog -ldl -lm -lgraph_base 
